@@ -209,6 +209,7 @@ impl Drop for Cursor {
     }
 }
 
+// Segfault
 // impl Drop for Transaction {
 //     fn drop(&mut self) {
 //         let res = Sophia::destroy(self.transaction);
@@ -319,8 +320,12 @@ impl Sophia {
 
 //#[test]
 pub fn it_works() {
+
+    println!("## Setup ##");
+
     let env = Sophia::new().unwrap();
     println!("env {:?} type {}", env.env, env.get_type().unwrap());
+
     let ctl = env.ctl().unwrap();
     println!("ctl {:?} type {}", ctl.ctl, ctl.get_type().unwrap());
 
@@ -335,7 +340,7 @@ pub fn it_works() {
     let db = ctl.get_db("db.test").unwrap();
     println!("ctl.get_db {:?}", db.db);
 
-    // Set
+    println!("## Set ##");
     {
         let object = db.object().unwrap();
         println!("object {:?} type {}", object.object, object.get_type().unwrap());
@@ -350,7 +355,7 @@ pub fn it_works() {
         println!("db.set.object {}", res.unwrap());
     }
 
-    // Get
+    println!("## Get ##");
     {
         let object = db.object().unwrap();
         println!("object {:?}", object.object);
@@ -366,7 +371,7 @@ pub fn it_works() {
         println!("object.get.{} {:?}", field, std::str::from_utf8(value).unwrap());
     }
 
-    // Transaction
+    println!("## Transaction ##");
     {
         let object = db.object().unwrap();
         println!("object {:?}", object.object);
@@ -386,7 +391,7 @@ pub fn it_works() {
         println!("transaction.commit {:?}", res.unwrap());
     }
 
-    // Cursor
+    println!("## Cursor ##");
     {
         let options = db.object().unwrap();
         println!("object {:?}", options.object);
@@ -408,7 +413,7 @@ pub fn it_works() {
         }
     }
 
-    // Delete
+    println!("## Delete ##");
     {
         let object = db.object().unwrap();
         println!("object {:?}", object.object);
