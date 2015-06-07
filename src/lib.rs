@@ -1,9 +1,44 @@
 #![feature(libc)]
 extern crate libc;
 
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 
 mod sophia;
+
+trait Type {
+    fn get_type(&self) -> Result<&str, usize> {
+        unsafe {
+            let sp_type = sophia::sp_type(self.ptr());
+            match sp_type as usize {
+                0 => Err(0),
+                _ => {
+                    let cstr = CStr::from_ptr(sp_type as *const libc::c_char);
+                    Ok(std::str::from_utf8(cstr.to_bytes()).unwrap())
+                }
+            }
+        }
+    }
+
+    fn ptr(&self) -> *mut libc::c_void;
+}
+
+impl Type for Object {
+    fn ptr(&self) -> *mut libc::c_void {
+        self.object
+    }    
+}
+
+impl Type for Sophia {
+    fn ptr(&self) -> *mut libc::c_void {
+        self.env
+    }    
+}
+
+impl Type for Ctl {
+    fn ptr(&self) -> *mut libc::c_void {
+        self.ctl
+    }    
+}
 
 // Env
 pub struct Sophia {
@@ -24,6 +59,10 @@ pub struct Object {
 
 pub struct Cursor {
     cursor: *mut libc::c_void
+}
+
+pub struct Transaction {
+    transaction: *mut libc::c_void
 }
 
 impl Ctl {
@@ -127,7 +166,6 @@ impl Object {
         unsafe {
             let len = 0;
             let value = sophia::sp_get(self.object, field.as_ptr(), &len);
-            println!("value {:?} len {}", value, len);
             match value as usize {
                 0 => Err(0),
                 _ => {
@@ -171,6 +209,53 @@ impl Drop for Cursor {
     }
 }
 
+// impl Drop for Transaction {
+//     fn drop(&mut self) {
+//         let res = Sophia::destroy(self.transaction);
+//         println!("transaction destroy {}", res.unwrap());
+//     }
+// }
+
+// TODO set/get/delete are the same as for Db, make a trait?
+impl Transaction {
+    pub fn set(&self, object: &Object) -> Result<isize, isize> {
+        unsafe {
+            match sophia::sp_set(self.transaction, object.object) as isize {
+                0 => Ok(0),
+                e => Err(e)
+            }
+        }
+    }
+
+    fn get(&self, object: &Object) -> Result<Object, usize> {
+        unsafe {
+            let object = sophia::sp_get(self.transaction, object.object);
+            match object as usize {
+                0 => Err(0),
+                _ => Ok(Object{object: object})
+            }
+        }
+    }
+
+    pub fn delete(&self, object: &Object) -> Result<isize, isize> {
+        unsafe {
+            match sophia::sp_delete(self.transaction, object.object) as isize {
+                0 => Ok(0),
+                e => Err(e)
+            }
+        }
+    }
+
+    pub fn commit(&self) -> Result<isize, isize> {
+        unsafe {
+            match sophia::sp_commit(self.transaction) as isize {
+                -1 => Err(-1),
+                s => Ok(s)
+            }
+        }
+    }
+}
+
 impl Sophia {
     pub fn new() -> Result<Sophia, usize> {
         unsafe {
@@ -202,6 +287,16 @@ impl Sophia {
         }
     }
 
+    pub fn transaction(&self) -> Result<Transaction, usize> {
+        unsafe {
+            let transaction = sophia::sp_begin(self.env);
+            match transaction as usize {
+                0 => Err(0),
+                _ => Ok(Transaction{transaction: transaction})
+            }
+        }
+    }    
+
     /// check if there any error leads to the shutdown
     pub fn error(&self) -> Result<isize, isize> {
         unsafe {
@@ -225,9 +320,9 @@ impl Sophia {
 //#[test]
 pub fn it_works() {
     let env = Sophia::new().unwrap();
-    println!("env {:?}", env.env);
+    println!("env {:?} type {}", env.env, env.get_type().unwrap());
     let ctl = env.ctl().unwrap();
-    println!("ctl {:?}", ctl.ctl);
+    println!("ctl {:?} type {}", ctl.ctl, ctl.get_type().unwrap());
 
     let res = ctl.set("sophia.path", "./test.db");
     println!("ctl.set {}", res.unwrap());
@@ -243,7 +338,7 @@ pub fn it_works() {
     // Set
     {
         let object = db.object().unwrap();
-        println!("object {:?}", object.object);
+        println!("object {:?} type {}", object.object, object.get_type().unwrap());
 
         let res = object.set("key", "hello".as_bytes());
         println!("object.set.key {}", res.unwrap());
@@ -253,28 +348,6 @@ pub fn it_works() {
 
         let res = db.set(&object);
         println!("db.set.object {}", res.unwrap());
-    }
-
-    // Cursor
-    {
-        let options = db.object().unwrap();
-        println!("object {:?}", options.object);
-
-        let cursor = db.cursor(&options).unwrap();
-        println!("db.cursor {:?}", cursor.cursor);
-
-        loop {
-            let object = cursor.get();
-            match object {
-                Err(_) => break,
-                Ok(object) => {
-                    let key = object.get("key").unwrap();
-                    println!("Iteration object.key = {:?}", std::str::from_utf8(key).unwrap());
-                    let value = object.get("value").unwrap();
-                    println!("Iteration object.value = {:?}", std::str::from_utf8(value).unwrap());
-                }
-            }
-        }
     }
 
     // Get
@@ -291,6 +364,48 @@ pub fn it_works() {
         let field = "value";
         let value = object.get(field).ok().expect("value can't be read");
         println!("object.get.{} {:?}", field, std::str::from_utf8(value).unwrap());
+    }
+
+    // Transaction
+    {
+        let object = db.object().unwrap();
+        println!("object {:?}", object.object);
+
+        let res = object.set("key", "inside".as_bytes());
+        println!("object.set.key {}", res.unwrap());
+
+        let res = object.set("value", "transaction".as_bytes());
+        println!("object.set.value {}", res.unwrap());
+
+        let transaction = env.transaction().unwrap();
+
+        let res = transaction.set(&object);
+        println!("transaction.set.object {:?}", res.unwrap());
+
+        let res = transaction.commit();
+        println!("transaction.commit {:?}", res.unwrap());
+    }
+
+    // Cursor
+    {
+        let options = db.object().unwrap();
+        println!("object {:?}", options.object);
+
+        let cursor = db.cursor(&options).unwrap();
+        println!("db.cursor {:?}", cursor.cursor);
+
+        loop {
+            let object = cursor.get();
+            match object {
+                Err(_) => break,
+                Ok(object) => {
+                    let key = object.get("key").unwrap();
+                    let value = object.get("value").unwrap();
+                    println!("cursor.object.key = {:?}", std::str::from_utf8(key).unwrap());
+                    println!("cursor.object.value = {:?}", std::str::from_utf8(value).unwrap());
+                }
+            }
+        }
     }
 
     // Delete
