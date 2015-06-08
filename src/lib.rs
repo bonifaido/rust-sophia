@@ -5,7 +5,7 @@ use std::ffi::{CStr, CString};
 
 mod sophia;
 
-trait Type {
+trait Native {
     fn get_type(&self) -> Result<&str, usize> {
         unsafe {
             let sp_type = sophia::sp_type(self.ptr());
@@ -22,19 +22,19 @@ trait Type {
     fn ptr(&self) -> *mut libc::c_void;
 }
 
-impl Type for Object {
+impl Native for Object {
     fn ptr(&self) -> *mut libc::c_void {
         self.object
     }    
 }
 
-impl Type for Sophia {
+impl Native for Sophia {
     fn ptr(&self) -> *mut libc::c_void {
         self.env
     }    
 }
 
-impl Type for Ctl {
+impl Native for Ctl {
     fn ptr(&self) -> *mut libc::c_void {
         self.ctl
     }    
@@ -42,7 +42,8 @@ impl Type for Ctl {
 
 // Env
 pub struct Sophia {
-    env: *mut libc::c_void
+    env: *mut libc::c_void,
+    ctl: Ctl
 }
 
 pub struct Ctl {
@@ -66,12 +67,12 @@ pub struct Transaction {
 }
 
 impl Ctl {
-    pub fn set(&self, key: &str, value: &str) -> Result<isize, isize> {
+    pub fn set(&self, key: &str, value: &str) -> Result<(), isize> {
         let key = CString::new(key).unwrap();
         let value = CString::new(value).unwrap();
         unsafe {
             match sophia::sp_set(self.ctl, key.as_ptr(), value.as_ptr()) as isize {
-                0 => Ok(0),
+                0 => Ok(()),
                 e => Err(e)
             }
         }
@@ -111,10 +112,10 @@ impl Db {
         }
     }
 
-    fn set(&self, object: &Object) -> Result<isize, isize> {
+    fn set(&self, object: &Object) -> Result<(), isize> {
         unsafe {
             match sophia::sp_set(self.db, object.object) as isize {
-                0 => Ok(0),
+                0 => Ok(()),
                 e => Err(e)
             }
         }
@@ -130,10 +131,10 @@ impl Db {
         }
     }
 
-    fn delete(&self, object: &Object) -> Result<isize, isize> {
+    fn delete(&self, object: &Object) -> Result<(), isize> {
         unsafe {
             match sophia::sp_delete(self.db, object.object) as isize {
-                0 => Ok(0),
+                0 => Ok(()),
                 e => Err(e)
             }
         }
@@ -151,11 +152,11 @@ impl Db {
 }
 
 impl Object {
-    pub fn set(&self, field: &str, value: &[u8]) -> Result<isize, isize> {
+    pub fn set(&self, field: &str, value: &[u8]) -> Result<(), isize> {
         let field = CString::new(field).unwrap();
         unsafe {
             match sophia::sp_set(self.object, field.as_ptr(), value, value.len()) as isize {
-                0 => Ok(0),
+                0 => Ok(()),
                 e => Err(e)
             }
         }
@@ -191,38 +192,30 @@ impl Cursor {
 impl Drop for Sophia {
     fn drop(&mut self) {
         let res = Sophia::destroy(self.env);
-        println!("env destroy {}", res.unwrap());
+        println!("env destroy {:?}", res.unwrap());
     }
 }
 
 impl Drop for Object {
     fn drop(&mut self) {
         let res = Sophia::destroy(self.object);
-        println!("object destroy {}", res.unwrap());
+        println!("object destroy {:?}", res.unwrap());
     }
 }
 
 impl Drop for Cursor {
     fn drop(&mut self) {
         let res = Sophia::destroy(self.cursor);
-        println!("cursor destroy {}", res.unwrap());
+        println!("cursor destroy {:?}", res.unwrap());
     }
 }
 
-// Segfault
-// impl Drop for Transaction {
-//     fn drop(&mut self) {
-//         let res = Sophia::destroy(self.transaction);
-//         println!("transaction destroy {}", res.unwrap());
-//     }
-// }
-
 // TODO set/get/delete are the same as for Db, make a trait?
 impl Transaction {
-    pub fn set(&self, object: &Object) -> Result<isize, isize> {
+    pub fn set(&self, object: &Object) -> Result<(), isize> {
         unsafe {
             match sophia::sp_set(self.transaction, object.object) as isize {
-                0 => Ok(0),
+                0 => Ok(()),
                 e => Err(e)
             }
         }
@@ -238,10 +231,10 @@ impl Transaction {
         }
     }
 
-    pub fn delete(&self, object: &Object) -> Result<isize, isize> {
+    pub fn delete(&self, object: &Object) -> Result<(), isize> {
         unsafe {
             match sophia::sp_delete(self.transaction, object.object) as isize {
-                0 => Ok(0),
+                0 => Ok(()),
                 e => Err(e)
             }
         }
@@ -255,6 +248,10 @@ impl Transaction {
             }
         }
     }
+
+    pub fn destroy(&self) -> Result<(), isize> {
+        Sophia::destroy(self.transaction)
+    }
 }
 
 impl Sophia {
@@ -263,27 +260,27 @@ impl Sophia {
             let env = sophia::sp_env();
             match env as usize {
                 0 => Err(0),
-                _ => Ok(Sophia{env: env})
+                _ => {
+                    let ctl = sophia::sp_ctl(env);
+                    match ctl as usize {
+                        0 => Err(0),
+                        _ => Ok(Sophia{env: env, ctl: Ctl{ctl: ctl}})
+                    }
+                }
             }
         }
     }
 
-    pub fn ctl(&self) -> Result<Ctl, usize> {
-        unsafe {
-            let ctl = sophia::sp_ctl(self.env);
-            match ctl as usize {
-                0 => Err(0),
-                _ => Ok(Ctl{ctl: ctl})
-            }
-        }
+    pub fn ctl(&self) -> &Ctl {
+        &self.ctl
     }
 
     /// create or open database
-    pub fn open(&self) -> Result<isize, isize> {
+    pub fn open(&self) -> Result<(), isize> {
         unsafe {
             match sophia::sp_open(self.env) as isize {
-                0 => Ok(0),
-                e => Err(e)
+                0 => Ok(()),
+                _ => Err(-1)
             }
         }
     }
@@ -299,20 +296,20 @@ impl Sophia {
     }    
 
     /// check if there any error leads to the shutdown
-    pub fn error(&self) -> Result<isize, isize> {
+    pub fn error(&self) -> Option<isize> {
         unsafe {
             match sophia::sp_error(self.env) as isize {
-                0 => Ok(0),
-                e => Err(e)
+                0 => None,
+                e => Some(e)
             }
         }
     }
 
-    fn destroy(object: *mut libc::c_void) -> Result<isize, isize> {
+    fn destroy(object: *mut libc::c_void) -> Result<(), isize> {
         unsafe {
             match sophia::sp_destroy(object) as isize {
-                0 => Ok(0),
-                e => Err(e)
+                0 => Ok(()),
+                _ => Err(-1)
             }
         }
     }
@@ -326,16 +323,15 @@ pub fn it_works() {
     let env = Sophia::new().unwrap();
     println!("env {:?} type {}", env.env, env.get_type().unwrap());
 
-    let ctl = env.ctl().unwrap();
-    println!("ctl {:?} type {}", ctl.ctl, ctl.get_type().unwrap());
+    let ctl = env.ctl();
 
     let res = ctl.set("sophia.path", "./test.db");
-    println!("ctl.set {}", res.unwrap());
+    println!("ctl.set {:?}", res.unwrap());
     let res = ctl.set("db", "test");
-    println!("ctl.set {}", res.unwrap());
+    println!("ctl.set {:?}", res.unwrap());
 
     let res = env.open();
-    println!("env.open {}", res.unwrap());
+    println!("env.open {:?}", res.unwrap());
 
     let db = ctl.get_db("db.test").unwrap();
     println!("ctl.get_db {:?}", db.db);
@@ -346,13 +342,13 @@ pub fn it_works() {
         println!("object {:?} type {}", object.object, object.get_type().unwrap());
 
         let res = object.set("key", "hello".as_bytes());
-        println!("object.set.key {}", res.unwrap());
+        println!("object.set.key {:?}", res.unwrap());
 
         let res = object.set("value", "world".as_bytes());
-        println!("object.set.value {}", res.unwrap());
+        println!("object.set.value {:?}", res.unwrap());
 
         let res = db.set(&object);
-        println!("db.set.object {}", res.unwrap());
+        println!("db.set.object {:?}", res.unwrap());
     }
 
     println!("## Get ##");
@@ -361,7 +357,7 @@ pub fn it_works() {
         println!("object {:?}", object.object);
 
         let res = object.set("key", "hello".as_bytes());
-        println!("object.set.key {}", res.unwrap());
+        println!("object.set.key {:?}", res.unwrap());
 
         let object = db.get(&object).unwrap();
         println!("db.get.object {:?}", object.object);
@@ -377,10 +373,10 @@ pub fn it_works() {
         println!("object {:?}", object.object);
 
         let res = object.set("key", "inside".as_bytes());
-        println!("object.set.key {}", res.unwrap());
+        println!("object.set.key {:?}", res.unwrap());
 
         let res = object.set("value", "transaction".as_bytes());
-        println!("object.set.value {}", res.unwrap());
+        println!("object.set.value {:?}", res.unwrap());
 
         let transaction = env.transaction().unwrap();
 
@@ -419,7 +415,7 @@ pub fn it_works() {
         println!("object {:?}", object.object);
 
         let res = object.set("key", "hello".as_bytes());
-        println!("object.set.key {}", res.unwrap());
+        println!("object.set.key {:?}", res.unwrap());
 
         let res = db.delete(&object).unwrap();
         println!("db.delete.object {:?}", res);
