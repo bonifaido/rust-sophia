@@ -1,0 +1,6 @@
+language: rust
+rust: nightly
+
+script:
+    - ./sophia_gen.sh
+    - cargo test --verbose
