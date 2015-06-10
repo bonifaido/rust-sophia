@@ -397,7 +397,7 @@ pub fn it_works() {
 
     let ctl = env.ctl();
 
-    let res = ctl.set("sophia.path", "./test.db");
+    let res = ctl.set("sophia.path", "./target/test.db");
     println!("ctl.set {:?}", res.unwrap());
     let res = ctl.set("db", "test");
     println!("ctl.set {:?}", res.unwrap());
